@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from agentforge.agent import Agent
+from agentforge.dag import DAGAgent
 from agentforge.tools.base import ToolRegistry
 from agentforge.tools.examples import default_tools
 
@@ -56,6 +57,19 @@ async def run_agent(req: RunRequest) -> RunResponse:
         turns=result.turns,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+    )
+
+
+@app.post("/v1/run-dag", response_model=RunResponse)
+async def run_dag_agent(req: RunRequest) -> RunResponse:
+    """Run the LangGraph DAG agent — supports parallel tool execution within a turn."""
+    agent = DAGAgent(client=_client(), registry=_registry, model=req.model, max_turns=req.max_turns)
+    result = await agent.run(req.prompt)
+    return RunResponse(
+        final_text=result["final_text"],
+        turns=result["turns"],
+        input_tokens=result["input_tokens"],
+        output_tokens=result["output_tokens"],
     )
 
 

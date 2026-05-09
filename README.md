@@ -43,7 +43,13 @@ In another terminal:
 ```bash
 curl -s http://localhost:8090/tools | jq .
 
+# Linear agent (sequential tool calls)
 curl -s -X POST http://localhost:8090/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"What time is it, and what is 17 * 23?"}'
+
+# DAG agent (parallel tool calls, LangGraph)
+curl -s -X POST http://localhost:8090/v1/run-dag \
   -H "Content-Type: application/json" \
   -d '{"prompt":"What time is it, and what is 17 * 23?"}'
 ```
@@ -76,6 +82,10 @@ The agent now sees the schema (with descriptions) and can call this tool with va
 
 ## Architecture
 
+Two agent runtimes. Same registry, same tools, same client.
+
+### Linear agent (`Agent`)
+
 ```
 prompt ──► Agent ──► Claude (with tool schemas)
                           │
@@ -88,6 +98,28 @@ prompt ──► Agent ──► Claude (with tool schemas)
                                           tool_result ─► loop back to Claude
 ```
 
+### DAG agent (`DAGAgent`) — built on LangGraph
+
+```
+       ┌─────────────────────────────────────────────┐
+       │                                             │
+       ▼                                             │
+prompt ──► plan ──► execute ──► review ──► continue ─┘
+                  (parallel)         │
+                                     └── done ──► END
+```
+
+**Why the DAG version exists:** when Claude returns multiple `tool_use` blocks
+in a single turn (e.g. "fetch the Kafka offset *and* the Vault secret"), the
+linear agent runs them sequentially. The DAG `execute` node fans them out
+through `asyncio.gather` so independent tools run **concurrently**, collapsing
+N round-trips into one. This is the same pattern production agent platforms
+use to keep multi-tool turns under a second.
+
+LangGraph also gives you state checkpointing, observability hooks, and the
+ability to add conditional branches (e.g. route to a "human approval" node
+before risky tool calls) — all without rewriting the agent loop.
+
 ## Project Structure
 
 ```
@@ -95,16 +127,18 @@ src/agentforge/
 ├── tools/
 │   ├── base.py        → Tool, ToolRegistry, @tool decorator
 │   └── examples.py    → calculate, get_time, rotate_secret
-├── agent.py           → Multi-turn loop with Anthropic tool-use
+├── agent.py           → Linear loop with Anthropic tool-use
+├── dag.py             → LangGraph DAG agent (parallel tool execution)
 └── server.py          → FastAPI HTTP layer
 tests/
 ├── test_tools.py
-└── test_agent.py
+├── test_agent.py
+└── test_dag.py
 ```
 
 ## Roadmap
 
-- [ ] LangGraph-based DAG agents (parallel tool calls, branches)
+- [x] LangGraph-based DAG agents (parallel tool calls, branches)
 - [ ] AWS Lambda deployment template
 - [ ] OpenTelemetry tracing per tool call
 - [ ] PII redaction (regex + spaCy NER) on inputs/outputs
